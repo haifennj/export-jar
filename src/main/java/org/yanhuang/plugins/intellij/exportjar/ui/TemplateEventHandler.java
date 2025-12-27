@@ -1,25 +1,47 @@
 package org.yanhuang.plugins.intellij.exportjar.ui;
 
+import java.awt.Component;
+import java.awt.event.ActionEvent;
+import java.awt.event.ItemEvent;
+import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import java.util.stream.Collectors;
+import javax.swing.ComboBoxModel;
+import javax.swing.DefaultComboBoxModel;
+import javax.swing.JCheckBox;
+
+import org.yanhuang.plugins.intellij.exportjar.model.ExportJarInfo;
+import org.yanhuang.plugins.intellij.exportjar.model.ExportOptions;
+import org.yanhuang.plugins.intellij.exportjar.model.SettingHistory;
+import org.yanhuang.plugins.intellij.exportjar.model.SettingSelectFile;
+import org.yanhuang.plugins.intellij.exportjar.model.SettingTemplate;
+import org.yanhuang.plugins.intellij.exportjar.settings.HistoryDao;
+
 import com.intellij.openapi.application.Application;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.vcs.changes.ui.ChangesTree;
 import com.intellij.openapi.vfs.VirtualFile;
-import org.yanhuang.plugins.intellij.exportjar.model.*;
-import org.yanhuang.plugins.intellij.exportjar.settings.HistoryDao;
 
-import javax.swing.*;
-import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.ItemEvent;
-import java.nio.file.Path;
-import java.util.List;
-import java.util.*;
-import java.util.stream.Collectors;
-
-import static com.intellij.openapi.ui.Messages.*;
+import static com.intellij.openapi.ui.Messages.NO;
+import static com.intellij.openapi.ui.Messages.getWarningIcon;
+import static com.intellij.openapi.ui.Messages.showErrorDialog;
+import static com.intellij.openapi.ui.Messages.showInfoMessage;
+import static com.intellij.openapi.ui.Messages.showYesNoDialog;
 import static org.yanhuang.plugins.intellij.exportjar.ui.FileListTreeHandler.collectVirtualFilesInTree;
 import static org.yanhuang.plugins.intellij.exportjar.ui.FileListTreeHandler.updateUIFileListTreeGrouping;
-import static org.yanhuang.plugins.intellij.exportjar.utils.Constants.*;
+import static org.yanhuang.plugins.intellij.exportjar.utils.Constants.messageTemplateDelError;
+import static org.yanhuang.plugins.intellij.exportjar.utils.Constants.messageTemplateDelYesNo;
+import static org.yanhuang.plugins.intellij.exportjar.utils.Constants.messageTemplateNameNull;
+import static org.yanhuang.plugins.intellij.exportjar.utils.Constants.messageTemplateSaveSuccess;
+import static org.yanhuang.plugins.intellij.exportjar.utils.Constants.templateDefaultName;
+import static org.yanhuang.plugins.intellij.exportjar.utils.Constants.templateGlobalName;
+import static org.yanhuang.plugins.intellij.exportjar.utils.Constants.titleTemplateMessageDialog;
+import static org.yanhuang.plugins.intellij.exportjar.utils.Constants.toolTipEmptyTemplate;
 import static org.yanhuang.plugins.intellij.exportjar.utils.MessagesUtils.errorNotify;
 
 /**
@@ -96,9 +118,30 @@ public class TemplateEventHandler {
 	 * @param e event
 	 */
 	public void exportJarChanged(ItemEvent e) {
-		if (ItemEvent.SELECTED == e.getStateChange()) {
-			final String name = Objects.toString(e.getItem());
-			settingDialog.outPutJarFileComboBox.setToolTipText(name);
+		// if (ItemEvent.SELECTED == e.getStateChange()) {
+		// 	final String name = Objects.toString(e.getItem());
+		// 	settingDialog.outPutJarFileComboBox.setToolTipText(name);
+		// }
+		if (ItemEvent.SELECTED != e.getStateChange()) {
+			return;
+		}
+
+		final String path = Objects.toString(e.getItem());
+		settingDialog.outPutJarFileComboBox.setToolTipText(path);
+
+		// ===== 核心逻辑：根据 jar 路径控制 Export source file =====
+		JCheckBox exportSourceCheckBox = settingDialog.exportJavaFileCheckBox;
+		if (exportSourceCheckBox == null) {
+			return;
+		}
+
+		boolean disable = shouldDisableExportSource();
+		if (disable) {
+			exportSourceCheckBox.setSelected(false);
+			exportSourceCheckBox.setEnabled(false);
+		} else {
+			exportSourceCheckBox.setEnabled(true);
+			// 不强制恢复勾选，交给用户
 		}
 	}
 
@@ -397,5 +440,22 @@ public class TemplateEventHandler {
 			errorNotify(titleTemplateMessageDialog, String.format(messageTemplateDelError, template));
 		}
 	}
+
+	private static final List<String> DISABLE_SOURCE_KEYWORDS = List.of(
+			"aws-bpmn-engine",
+			"aws-dmn-engine",
+			"aws-infrastructure-ai",
+			"aws-infrastructure-core"
+	);
+
+	private boolean shouldDisableExportSource() {
+		for (VirtualFile selectedFile : settingDialog.selectedFiles) {
+			String path = selectedFile.getPath();
+			return path != null
+					&& DISABLE_SOURCE_KEYWORDS.stream().anyMatch(path::contains);
+		}
+		return false;
+	}
+
 
 }

@@ -1,22 +1,33 @@
 package org.yanhuang.plugins.intellij.exportjar.ui;
 
-import com.intellij.openapi.MnemonicHelper;
-import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.compiler.CompileStatusNotification;
-import com.intellij.openapi.compiler.CompilerManager;
-import com.intellij.openapi.fileChooser.FileChooser;
-import com.intellij.openapi.fileChooser.FileChooserDescriptor;
-import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
-import com.intellij.openapi.module.Module;
-import com.intellij.openapi.project.Project;
-import com.intellij.openapi.ui.DialogWrapper;
-import com.intellij.openapi.ui.Messages;
-import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.ui.JBSplitter;
-import com.intellij.ui.SeparatorFactory;
-import com.intellij.ui.TitledSeparator;
-import com.intellij.util.Consumer;
-import com.intellij.util.ui.components.BorderLayoutPanel;
+import java.awt.BorderLayout;
+import java.awt.Component;
+import java.awt.Dimension;
+import java.awt.event.ActionEvent;
+import java.awt.event.ItemEvent;
+import java.awt.event.KeyEvent;
+import java.io.IOException;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collection;
+import java.util.HashSet;
+import java.util.List;
+import java.util.Objects;
+import java.util.Optional;
+import java.util.Set;
+import javax.swing.ComboBoxModel;
+import javax.swing.DefaultComboBoxModel;
+import javax.swing.JButton;
+import javax.swing.JCheckBox;
+import javax.swing.JComboBox;
+import javax.swing.JComponent;
+import javax.swing.JPanel;
+import javax.swing.KeyStroke;
+
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.yanhuang.plugins.intellij.exportjar.ExportPacker;
@@ -30,21 +41,35 @@ import org.yanhuang.plugins.intellij.exportjar.utils.Constants;
 import org.yanhuang.plugins.intellij.exportjar.utils.MessagesUtils;
 import org.yanhuang.plugins.intellij.exportjar.utils.UpgradeManager;
 
-import javax.swing.*;
-import java.awt.*;
-import java.awt.event.ActionEvent;
-import java.awt.event.KeyEvent;
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
-import java.util.List;
+import com.intellij.openapi.MnemonicHelper;
+import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.compiler.CompileStatusNotification;
+import com.intellij.openapi.compiler.CompilerManager;
+import com.intellij.openapi.fileChooser.FileChooser;
+import com.intellij.openapi.fileChooser.FileChooserDescriptor;
+import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
+import com.intellij.openapi.module.Module;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.ui.DialogWrapper;
+import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.psi.JavaDirectoryService;
+import com.intellij.psi.PsiDirectory;
+import com.intellij.psi.PsiManager;
+import com.intellij.psi.PsiPackage;
+import com.intellij.ui.JBSplitter;
+import com.intellij.ui.SeparatorFactory;
+import com.intellij.ui.TitledSeparator;
+import com.intellij.util.Consumer;
+import com.intellij.util.ui.components.BorderLayoutPanel;
 
 import static com.intellij.openapi.ui.Messages.getWarningIcon;
 import static com.intellij.openapi.ui.Messages.showErrorDialog;
 import static com.intellij.util.ui.JBUI.Panels.simplePanel;
 import static javax.swing.BorderFactory.createEmptyBorder;
-import static org.yanhuang.plugins.intellij.exportjar.utils.CommonUtils.*;
+import static org.yanhuang.plugins.intellij.exportjar.utils.CommonUtils.backgroundRunWithoutLock;
+import static org.yanhuang.plugins.intellij.exportjar.utils.CommonUtils.findModule;
+import static org.yanhuang.plugins.intellij.exportjar.utils.CommonUtils.runInBgtWithReadLockAndWait;
 
 /**
  * export jar settings dialog (link to SettingDialog.form)
@@ -58,7 +83,7 @@ public class SettingDialog extends DialogWrapper {
 	private JPanel contentPane;
 	private JButton buttonOK;
 	private JButton buttonCancel;
-	private JCheckBox exportJavaFileCheckBox;
+	protected JCheckBox exportJavaFileCheckBox;
 	private JCheckBox exportClassFileCheckBox;
 	private JCheckBox exportTestFileCheckBox;
 	private JCheckBox exportAddDirectoryCheckBox;
@@ -108,6 +133,7 @@ public class SettingDialog extends DialogWrapper {
 //        uiDebug();
 		updateComponentState(template);
 		updateTemplateUiState();
+		initDefaultOutputJarPath(selectedFiles); // ← 就放这里
 		this.templateEnableCheckBox.addItemListener(templateHandler::templateEnableChanged);
 		this.templateSaveButton.addActionListener(templateHandler::saveTemplate);
 		this.templateDelButton.addActionListener(templateHandler::delTemplate);
@@ -115,6 +141,100 @@ public class SettingDialog extends DialogWrapper {
 		this.outPutJarFileComboBox.addItemListener(templateHandler::exportJarChanged);
 		initMnemonics();
 	}
+
+	private void initDefaultOutputJarPath(VirtualFile[] selectedFiles) {
+		if (outPutJarFileComboBox == null) {
+			return;
+		}
+
+		ComboBoxModel<String> model = outPutJarFileComboBox.getModel();
+		if (!(model instanceof DefaultComboBoxModel)) {
+			return;
+		}
+
+		DefaultComboBoxModel<String> comboModel =
+				(DefaultComboBoxModel<String>) model;
+
+		// 如果已经有选中值（历史 / 模板），不覆盖
+		Object selected = comboModel.getSelectedItem();
+		if (selected != null && !selected.toString().trim().isEmpty()) {
+			// return;
+		}
+
+		// ===== 1. 生成时间前缀 =====
+		SimpleDateFormat datetimeFormat = new SimpleDateFormat("yyyyMMddHHmm");
+		String time = datetimeFormat.format(System.currentTimeMillis());
+
+		// ===== 2. jar 名称 =====
+		String jarName = "";
+		if (selectedFiles.length == 1 && !selectedFiles[0].isDirectory()) {//如果选中一个类，则以类名为默认jar名称
+			jarName = selectedFiles[0].getName();
+		} else {
+			List<String> names = new ArrayList<>();
+			PsiManager psiManager = PsiManager.getInstance(project);
+			for (VirtualFile file : selectedFiles) {
+				PsiDirectory psiDirectory = file.isDirectory()
+						? psiManager.findDirectory(file)
+						: psiManager.findDirectory(file.getParent());
+				if (psiDirectory != null) {
+					PsiPackage psiPackage = JavaDirectoryService.getInstance().getPackage(psiDirectory);
+					names.add(psiPackage.getQualifiedName());
+				}
+			}
+			jarName = getTheSameStart(names);
+			if (jarName.isEmpty()) {
+				jarName = "multiModule";
+			}
+			if (jarName.endsWith(".")) {
+				jarName = jarName.substring(0, jarName.lastIndexOf("."));
+			}
+		}
+		jarName = time + "-" + jarName + "-patch.jar";
+
+		// ===== 3. Desktop/<projectName> 路径 =====
+		String userHome = System.getProperty("user.home");
+		String separator = System.getProperty("file.separator");
+
+		String defaultOutputDir =
+				userHome + separator + "Desktop" + separator + project.getName();
+
+		String fullJarPath = defaultOutputDir + separator + jarName;
+
+		// ===== 4. 设置到 ComboBox =====
+		comboModel.insertElementAt(fullJarPath, 0);
+		comboModel.setSelectedItem(fullJarPath);
+
+		Object jar = outPutJarFileComboBox.getSelectedItem();
+		templateHandler.exportJarChanged(
+				new ItemEvent(outPutJarFileComboBox, ItemEvent.ITEM_STATE_CHANGED, jar, ItemEvent.SELECTED)
+		);
+	}
+	private String getTheSameStart(List<String> strings) {
+		if (strings == null || strings.size() == 0) {
+			return "";
+		}
+		int max = 888888;
+		for (String string : strings) {
+			if (string.length() < max) {
+				max = string.length();
+			}
+		}
+		StringBuilder sb = new StringBuilder();
+		HashSet set = new HashSet();
+		for (int i = 0; i < max; i++) {
+			for (String string : strings) {
+				set.add(string.charAt(i));
+			}
+			if (set.size() == 1) {
+				sb.append(set.iterator().next());
+			} else {
+				break;
+			}
+			set.clear();
+		}
+		return sb.toString();
+	}
+
 
 	private void updateComponentState(String template) {
 		this.setResizable(true);
@@ -315,6 +435,11 @@ public class SettingDialog extends DialogWrapper {
 				String basePath = project.getBasePath();
 				exportJarParentPath = Paths.get(Objects.requireNonNullElse(basePath, "./"));
 				exportJarFullPath = exportJarParentPath.resolve(exportJarFullPath);
+			}
+			try {
+				Files.createDirectories(exportJarParentPath);
+			} catch (IOException e) {
+				throw new RuntimeException(e);
 			}
 			if (!Files.exists(exportJarParentPath)) {
 				app.invokeAndWait(() -> showErrorDialog(project, "The selected output path is not exists",

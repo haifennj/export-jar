@@ -1,6 +1,6 @@
 <idea-plugin require-restart="false" >
-    <id>org.yanhuang.plugins.intellij.exportjar</id>
-    <name>Handy Export Jar</name>
+    <id>org.yanhuang.plugins.intellij.exportjar2</id>
+    <name>Handy Export Jar 2</name>
     <vendor email="zhyhang1978@gmail.com" url="https://github.com/zhyhang/export-jar">Yanhuang</vendor>
 
     <!-- The version will replace by gradle's generated from gradle.properties, do not uncomment following -->
