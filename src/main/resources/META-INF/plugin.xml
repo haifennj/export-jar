@@ -82,6 +82,14 @@
                           relative-to-action="ChangesView.GroupBy.Directory"/>
         </action>
         -->
+        <action id="org.yanhuang.plugins.intellij.exportjar.ExportJarAction2"
+                class="org.yanhuang.plugins.intellij.exportjar.ExportJarAction" text="Export &amp;Jar..."
+                description="Export select files to jar">
+            <add-to-group group-id="EditorPopupMenu" anchor="before" relative-to-action="EditorPopupMenu2"/>
+            <!-- throw swing context event exception when trigger by first-keystroke -->
+            <!--<keyboard-shortcut keymap="$default" first-keystroke="control alt F9"/>-->
+        </action>
+
     </actions>
 
 </idea-plugin>
